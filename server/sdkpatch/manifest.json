@@ -1,0 +1,39 @@
+{
+  "schema": "wc-sdk-overlay/1",
+  "module": "go.mau.fi/whatsmeow",
+  "version": "v0.0.0-20260925162019-b3832c2bd1d1",
+  "revision": "wc-context-send-queue-media-2",
+  "license": "MPL-2.0; upstream headers preserved; patch source distributed alongside manifest",
+  "patch_sha256": "892cd57aec1faf0cbfae2c48acb5ca7452f161bef0111a52cb582bdd4a06f471",
+  "files": {
+    "send.go": {
+      "original_sha256": "b96f7a758f8cd5c1d9b81c0072b8d17e07d2ee2e77ff61b0c3f38cccf9bde81f",
+      "patched_sha256": "ad76431a466794cbec1e16be98c118d5f8106816207b30b1a9726adef3b7301c"
+    },
+    "sendfb.go": {
+      "original_sha256": "2a63bdd0b9e1ada225c7246bf630095f2267627206cd95c4f5cc1a83be783d7f",
+      "patched_sha256": "1f8f1018becff87348bbcb614a0a027ccf44df28ffbd75d5b44af8b6e4a1c140"
+    },
+    "socket/noisesocket.go": {
+      "original_sha256": "c90dd53b782264b5e100f2fe0e79d6f61b3acbd0f8af276034ca3cec4015ece4",
+      "patched_sha256": "c39f95cb17a6026cabc1cf7c3eb8f9dad73a90d6f7217bb282034d503a4e894b"
+    },
+    "user.go": {
+      "original_sha256": "da4c68aa720fbf9b542498e72a16ce0a56ac8e45ddd05595d02e976cd193dd62",
+      "patched_sha256": "55df468d72c1d4d6a5c48d461e1db6be732701d8bbfe98d5e88cc327dc661882"
+    },
+    "client.go": {
+      "original_sha256": "7879c465cd18fcc8b469e368b1418df646f65c7e7ffa5864c12301303fd2f26c",
+      "patched_sha256": "c0b8bc8ed186c1f0a308afbd27243fd1a77da6220aa3764fdff6a065c1007eff"
+    },
+    "request.go": {
+      "original_sha256": "98c818b4e33e4ebd4b5340c635edabf66e8cfcb493098aaa51d4326ac3f490cc",
+      "patched_sha256": "a6c208a67250db359784cc380329cc69509a780030b289547ab0db4bdc9c449e"
+    },
+    "mediaconn.go": {
+      "original_sha256": "f4e4abdaf308990c553b3448ce4ce3eb02f000f80478341c0feae54739c94a51",
+      "patched_sha256": "bfdbf57c1467bfc36d71638c042585afa38f257429b6abd82c82f99f465fe13e"
+    }
+  },
+  "upstream_tree_sha256": "6ad7dd5f79d3f94d48d26d5ffa6b88d87800b5b9f652aa8e84c0bf6f4cf39860"
+}

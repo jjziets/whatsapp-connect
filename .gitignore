@@ -1,0 +1,33 @@
+# Account state must never enter Git, including private GitHub repositories.
+.env
+.env.*
+!.env.example
+data/
+state/
+store/
+sessions/
+auth/
+media/
+exports/
+logs/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*qr*.png
+*qr*.svg
+*.log
+*.key
+*.pem
+bin/
+dist/
+coverage/
+graphify-out/
+.memsearch/
+.DS_Store
+work/
+
+# Owner-authorized development-only runtime key; never index credentials.
+/.local-credentials/

@@ -1,0 +1,108 @@
+// Copyright (c) 2026 WhatsApp Connect contributors.
+// SPDX-License-Identifier: MPL-2.0
+package whatsmeow
+
+import (
+ "context"
+"sync"
+"sync/atomic"
+"runtime"
+ "errors"
+ "testing"
+ "time"
+
+ "go.mau.fi/whatsmeow/store"
+waBinary "go.mau.fi/whatsmeow/binary"
+ "go.mau.fi/whatsmeow/types"
+ waLog "go.mau.fi/whatsmeow/util/log"
+ "go.mau.fi/whatsmeow/proto/waE2E"
+ "go.mau.fi/whatsmeow/proto/waConsumerApplication"
+)
+
+type wcTestLIDs struct { store.LIDStore }
+func (wcTestLIDs) GetLIDForPN(context.Context,types.JID)(types.JID,error){return types.NewJID("99112233",types.HiddenUserServer),nil}
+func (wcTestLIDs) GetPNForLID(context.Context,types.JID)(types.JID,error){return types.NewJID("491500000000",types.DefaultUserServer),nil}
+
+// Real SDK entrypoints encounter the actual serialization mutex. Holding it
+// prevents any network action. No connection, signal session or real store.
+func TestWCSDKSendQueueCancellation(t *testing.T) {
+ for _,kind:=range []string{"application","peer","facebook"}{t.Run(kind,func(t *testing.T){
+  own:=types.NewJID("491500000000",types.DefaultUserServer)
+  cli:=NewClient(&store.Device{ID:&own,LID:types.NewJID("99112233",types.HiddenUserServer),LIDs:wcTestLIDs{}},waLog.Noop)
+  cli.messageSendLock.Lock()
+  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);defer cancel()
+  done:=make(chan error,1)
+  go func(){var err error;switch kind{
+   case "application":_,err=cli.SendMessage(ctx,own,&waE2E.Message{})
+   case "peer":_,err=cli.SendPeerMessage(ctx,&waE2E.Message{})
+   case "facebook":_,err=cli.SendFBMessage(ctx,own,&waConsumerApplication.ConsumerApplication{},nil,SendRequestExtra{Peer:true})
+  };done<-err}()
+  select{case err:=<-done:if !errors.Is(err,context.DeadlineExceeded){t.Fatalf("SDK returned %v",err)}
+   case<-time.After(250*time.Millisecond):t.Fatal("real SDK queue ignored canceled context (holder remains locked; no network possible)")}
+  cli.messageSendLock.Unlock()
+  if !cli.messageSendLock.TryLock(){t.Fatal("canceled caller acquired the lock late")};cli.messageSendLock.Unlock()
+ })}
+}
+
+func TestWCSDKOtherWaitCancellation(t *testing.T){
+ for _,kind:=range []string{"devices","socket-read"}{t.Run(kind,func(t *testing.T){
+  cli:=NewClient(&store.Device{},waLog.Noop)
+  if kind=="devices"{cli.userDevicesCacheLock.Lock()}else{cli.socketLock.Lock()}
+  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);defer cancel()
+  done:=make(chan error,1);go func(){var e error;if kind=="devices"{_,e=cli.GetUserDevices(ctx,nil)}else{_,e=cli.sendNodeAndGetData(ctx,waBinary.Node{})};done<-e}()
+  select{case e:=<-done:if !errors.Is(e,context.DeadlineExceeded){t.Fatal(e)};case<-time.After(250*time.Millisecond):t.Fatal("real SDK cache/socket read ignored cancellation")}
+  if kind=="devices"{cli.userDevicesCacheLock.Unlock()}else{cli.socketLock.Unlock()}
+ })}
+}
+
+func TestWCSDKQueueSerializationAndConnectionContexts(t *testing.T){
+ cli:=NewClient(&store.Device{},waLog.Noop)
+ if e:=cli.lockMessageSendContext(context.Background());e!=nil{t.Fatal(e)};cli.messageSendLock.Unlock()
+ var active atomic.Int32;var wg sync.WaitGroup
+ for i:=0;i<20;i++{wg.Add(1);go func(){defer wg.Done();ctx,cancel:=context.WithTimeout(context.Background(),time.Second);defer cancel();if e:=cli.lockMessageSendContext(ctx);e!=nil{t.Error(e);return};if active.Add(1)!=1{t.Error("serialization violated")};runtime.Gosched();active.Add(-1);cli.messageSendLock.Unlock()}()};wg.Wait()
+ cli.socketLock.Lock()
+ for _,kind:=range []string{"connected","reconnect"}{ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);done:=make(chan bool,1);go func(){if kind=="connected"{done<-cli.IsConnectedContext(ctx)}else{done<-cli.WaitForConnectionContext(ctx,time.Second)}}();select{case got:=<-done:if got{t.Error("false connection")};case<-time.After(250*time.Millisecond):t.Error("context connection check blocked")};cancel()}
+ cli.socketLock.Unlock()
+}
+
+type wcBlockedSessions struct{store.SessionStore;entered chan struct{};release chan struct{}}
+func (s wcBlockedSessions) HasSession(context.Context,string)(bool,error){close(s.entered);<-s.release;return false,errors.New("synthetic peer session boundary")}
+func TestWCSDKPeerHolderApplicationCancellation(t *testing.T){
+ own:=types.NewJID("491500000000",types.DefaultUserServer)
+ sessions:=wcBlockedSessions{entered:make(chan struct{}),release:make(chan struct{})}
+ cli:=NewClient(&store.Device{ID:&own,LID:types.NewJID("99112233",types.HiddenUserServer),LIDs:wcTestLIDs{},Sessions:sessions},waLog.Noop)
+ peer:=make(chan error,1);go func(){_,e:=cli.SendPeerMessage(context.Background(),&waE2E.Message{});peer<-e}()
+ select{case<-sessions.entered:case e:=<-peer:t.Fatalf("peer failed before actual session boundary: %v",e);case<-time.After(time.Second):t.Fatal("peer not admitted")}
+ ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);defer cancel()
+ done:=make(chan error,1);go func(){_,e:=cli.SendMessage(ctx,own,&waE2E.Message{});done<-e}()
+ select{case e:=<-done:if !errors.Is(e,context.DeadlineExceeded){t.Error(e)};case<-time.After(250*time.Millisecond):t.Error("application queued behind real SDK peer despite cancellation")}
+ close(sessions.release);select{case<-peer:case<-time.After(time.Second):t.Fatal("peer did not settle at fake storage boundary")}
+ if !cli.messageSendLock.TryLock(){t.Fatal("queue lock retained after peer settlement")};cli.messageSendLock.Unlock()
+}
+
+func TestWCSDKForwardMediaConnectionGuards(t *testing.T) {
+ t.Run("contended-cancellation", func(t *testing.T) {
+  cli := NewClient(&store.Device{}, waLog.Noop)
+  cli.mediaConnCache = &MediaConn{TTL: 60, FetchedAt: time.Now(), Hosts: []MediaConnHost{{Hostname: "mmg.whatsapp.net"}}}
+  cli.mediaConnLock.Lock()
+  defer cli.mediaConnLock.Unlock()
+  ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+  defer cancel()
+  done := make(chan error, 1)
+  go func() { _, err := cli.refreshMediaConn(ctx, false); done <- err }()
+  select {
+  case err := <-done:
+   if !errors.Is(err, context.DeadlineExceeded) {t.Fatal(err)}
+  case <-time.After(250*time.Millisecond):
+   t.Fatal("real SDK media connection lock ignored deadline")
+  }
+ })
+ t.Run("empty-hosts", func(t *testing.T) {
+  cli := NewClient(&store.Device{}, waLog.Noop)
+  cli.mediaConnCache = &MediaConn{TTL: 60, FetchedAt: time.Now()}
+  defer func() { if recover() != nil {t.Fatal("real SDK upload panicked on an empty media host list")} }()
+  if _, err := cli.Upload(context.Background(), []byte("synthetic"), MediaImage); err == nil {
+   t.Fatal("real SDK upload accepted an empty media host list")
+  }
+ })
+}

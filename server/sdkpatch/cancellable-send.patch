@@ -1,0 +1,250 @@
+--- a/send.go
++++ b/send.go
+@@ -14,6 +14,7 @@
+ 	"encoding/hex"
+ 	"errors"
+ 	"fmt"
++	"go.mau.fi/whatsmeow/socket"
+ 	"slices"
+ 	"sort"
+ 	"strconv"
+@@ -382,7 +383,9 @@
+ 	// Sending multiple messages at a time can cause weird issues and makes it harder to retry safely
+ 	// This is also required for the session prefetching that makes group sends faster
+ 	// (everything will explode if you send a message to the same user twice in parallel)
+-	cli.messageSendLock.Lock()
++	if err = cli.lockMessageSendContext(ctx); err != nil {
++		return
++	}
+ 	resp.DebugTimings.Queue = time.Since(start)
+ 	defer cli.messageSendLock.Unlock()
+ 
+@@ -464,13 +467,17 @@
+ 		switch to.Server {
+ 		case types.GroupServer:
+ 			// TODO also invalidate device list caches
+-			cli.groupCacheLock.Lock()
++			if err = socket.LockContext(ctx, cli.groupCacheLock.TryLock, cli.groupCacheLock.Unlock); err != nil {
++				return
++			}
+ 			delete(cli.groupCache, to)
+ 			cli.groupCacheLock.Unlock()
+ 		case types.BroadcastServer:
+ 			// TODO do something
+ 		case types.DefaultUserServer, types.HiddenUserServer, types.BotServer, types.HostedServer, types.HostedLIDServer:
+-			cli.userDevicesCacheLock.Lock()
++			if err = socket.LockContext(ctx, cli.userDevicesCacheLock.TryLock, cli.userDevicesCacheLock.Unlock); err != nil {
++				return
++			}
+ 			delete(cli.userDevicesCache, to)
+ 			cli.userDevicesCacheLock.Unlock()
+ 		}
+@@ -1449,3 +1456,10 @@
+ 		Content: ciphertext.Serialize(),
+ 	}, includeDeviceIdentity, nil
+ }
++
++// WhatsAppConnectSendQueueRevision identifies the reviewed local cancellation overlay.
++const WhatsAppConnectSendQueueRevision = "wc-context-send-queue-1"
++
++func (cli *Client) lockMessageSendContext(ctx context.Context) error {
++	return socket.LockContext(ctx, cli.messageSendLock.TryLock, cli.messageSendLock.Unlock)
++}
+--- a/sendfb.go
++++ b/sendfb.go
+@@ -133,7 +133,9 @@
+ 
+ 	start := time.Now()
+ 	// Sending multiple messages at a time can cause weird issues and makes it harder to retry safely
+-	cli.messageSendLock.Lock()
++	if err = cli.lockMessageSendContext(ctx); err != nil {
++		return
++	}
+ 	resp.DebugTimings.Queue = time.Since(start)
+ 	defer cli.messageSendLock.Unlock()
+ 
+--- a/socket/noisesocket.go
++++ b/socket/noisesocket.go
+@@ -12,6 +12,7 @@
+ 	"encoding/binary"
+ 	"sync"
+ 	"sync/atomic"
++	"time"
+ 
+ 	"github.com/coder/websocket"
+ )
+@@ -88,7 +89,9 @@
+ }
+ 
+ func (ns *NoiseSocket) SendFrame(ctx context.Context, plaintext []byte) error {
+-	ns.writeLock.Lock()
++	if err := LockContext(ctx, ns.writeLock.TryLock, ns.writeLock.Unlock); err != nil {
++		return err
++	}
+ 	defer ns.writeLock.Unlock()
+ 	if ctx.Err() != nil {
+ 		return ctx.Err()
+@@ -121,3 +124,36 @@
+ func (ns *NoiseSocket) IsConnected() bool {
+ 	return ns.fs.IsConnected()
+ }
++
++// LockContext preserves the caller's existing lock/unlock semantics without a
++// lock goroutine. Cancellation observed after acquisition releases the lock.
++func LockContext(ctx context.Context, tryLock func() bool, unlock func()) error {
++	var timer *time.Timer
++	defer func() {
++		if timer != nil {
++			timer.Stop()
++		}
++	}()
++	for {
++		if err := ctx.Err(); err != nil {
++			return err
++		}
++		if tryLock() {
++			if err := ctx.Err(); err != nil {
++				unlock()
++				return err
++			}
++			return nil
++		}
++		if timer == nil {
++			timer = time.NewTimer(2 * time.Millisecond)
++		} else {
++			timer.Reset(2 * time.Millisecond)
++		}
++		select {
++		case <-ctx.Done():
++			return ctx.Err()
++		case <-timer.C:
++		}
++	}
++}
+--- a/user.go
++++ b/user.go
+@@ -11,6 +11,7 @@
+ 	"encoding/base64"
+ 	"errors"
+ 	"fmt"
++	"go.mau.fi/whatsmeow/socket"
+ 	"slices"
+ 	"strings"
+ 
+@@ -480,7 +481,9 @@
+ 	if cli == nil {
+ 		return nil, ErrClientIsNil
+ 	}
+-	cli.userDevicesCacheLock.Lock()
++	if err := socket.LockContext(ctx, cli.userDevicesCacheLock.TryLock, cli.userDevicesCacheLock.Unlock); err != nil {
++		return nil, err
++	}
+ 	defer cli.userDevicesCacheLock.Unlock()
+ 
+ 	var devices, jidsToSync, fbJIDsToSync []types.JID
+--- a/client.go
++++ b/client.go
+@@ -474,22 +474,32 @@
+ }
+ 
+ func (cli *Client) WaitForConnection(timeout time.Duration) bool {
++	return cli.WaitForConnectionContext(context.Background(), timeout)
++}
++
++func (cli *Client) WaitForConnectionContext(ctx context.Context, timeout time.Duration) bool {
+ 	if cli == nil {
+ 		return false
+ 	}
+ 	timeoutChan := time.After(timeout)
+-	cli.socketLock.RLock()
++	if err := socket.LockContext(ctx, cli.socketLock.TryRLock, cli.socketLock.RUnlock); err != nil {
++		return false
++	}
+ 	for cli.socket == nil || !cli.socket.IsConnected() || !cli.IsLoggedIn() {
+ 		ch := cli.socketWait
+ 		cli.socketLock.RUnlock()
+ 		select {
+ 		case <-ch:
++		case <-ctx.Done():
++			return false
+ 		case <-timeoutChan:
+ 			return false
+ 		case <-cli.expectedDisconnect.GetChan():
+ 			return false
+ 		}
+-		cli.socketLock.RLock()
++		if err := socket.LockContext(ctx, cli.socketLock.TryRLock, cli.socketLock.RUnlock); err != nil {
++			return false
++		}
+ 	}
+ 	cli.socketLock.RUnlock()
+ 	return true
+@@ -663,11 +673,15 @@
+ 
+ // IsConnected checks if the client is connected to the WhatsApp web websocket.
+ // Note that this doesn't check if the client is authenticated. See the IsLoggedIn field for that.
+-func (cli *Client) IsConnected() bool {
++func (cli *Client) IsConnected() bool { return cli.IsConnectedContext(context.Background()) }
++
++func (cli *Client) IsConnectedContext(ctx context.Context) bool {
+ 	if cli == nil {
+ 		return false
+ 	}
+-	cli.socketLock.RLock()
++	if err := socket.LockContext(ctx, cli.socketLock.TryRLock, cli.socketLock.RUnlock); err != nil {
++		return false
++	}
+ 	connected := cli.socket != nil && cli.socket.IsConnected()
+ 	cli.socketLock.RUnlock()
+ 	return connected
+@@ -956,7 +970,9 @@
+ 	if cli == nil {
+ 		return nil, ErrClientIsNil
+ 	}
+-	cli.socketLock.RLock()
++	if err := socket.LockContext(ctx, cli.socketLock.TryRLock, cli.socketLock.RUnlock); err != nil {
++		return nil, err
++	}
+ 	sock := cli.socket
+ 	cli.socketLock.RUnlock()
+ 	if sock == nil {
+--- a/request.go
++++ b/request.go
+@@ -9,6 +9,7 @@
+ import (
+ 	"context"
+ 	"fmt"
++	"go.mau.fi/whatsmeow/socket"
+ 	"strconv"
+ 	"time"
+ 
+@@ -196,12 +197,14 @@
+ 	}
+ 
+ 	cli.Log.Debugf("%s (%s) was interrupted by websocket disconnection (%s), waiting for reconnect to retry...", id, reqType, origResp)
+-	if !cli.WaitForConnection(5 * time.Second) {
++	if !cli.WaitForConnectionContext(ctx, 5*time.Second) {
+ 		cli.Log.Debugf("Websocket didn't reconnect within 5 seconds of failed %s (%s)", reqType, id)
+ 		return nil, &DisconnectedError{Action: reqType, Node: origResp}
+ 	}
+ 
+-	cli.socketLock.RLock()
++	if err := socket.LockContext(ctx, cli.socketLock.TryRLock, cli.socketLock.RUnlock); err != nil {
++		return nil, err
++	}
+ 	sock := cli.socket
+ 	cli.socketLock.RUnlock()
+ 	if sock == nil {
+--- a/mediaconn.go
++++ b/mediaconn.go
+@@ -14,0 +15 @@
++	"go.mau.fi/whatsmeow/socket"
+@@ -48 +49,3 @@
+-	cli.mediaConnLock.Lock()
++	if err := socket.LockContext(ctx, cli.mediaConnLock.TryLock, cli.mediaConnLock.Unlock); err != nil {
++		return nil, err
++	}
+@@ -55,0 +59,3 @@
++	}
++	if len(cli.mediaConnCache.Hosts) == 0 {
++		return nil, fmt.Errorf("no media connection hosts")

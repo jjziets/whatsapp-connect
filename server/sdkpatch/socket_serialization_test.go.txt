@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: MPL-2.0
+package socket
+import("sync";"context";"errors";"testing";"time")
+func TestWCNoiseWriteCancellation(t *testing.T){
+ ns:=&NoiseSocket{};ns.writeLock.Lock()
+ ctx,cancel:=context.WithTimeout(context.Background(),20*time.Millisecond);defer cancel()
+ done:=make(chan error,1);go func(){done<-ns.SendFrame(ctx,nil)}()
+ select{case e:=<-done:if !errors.Is(e,context.DeadlineExceeded){t.Fatal(e)};case<-time.After(250*time.Millisecond):t.Fatal("real NoiseSocket write queue ignored cancellation")}
+ ns.writeLock.Unlock();if !ns.writeLock.TryLock(){t.Fatal("late lock acquisition")};ns.writeLock.Unlock()
+}
+
+func TestWCLockAcquisitionCancellationRace(t *testing.T){
+ var lock sync.Mutex
+ ctx,cancel:=context.WithCancel(context.Background())
+ e:=LockContext(ctx,func()bool{ok:=lock.TryLock();if ok{cancel()};return ok},lock.Unlock)
+ if !errors.Is(e,context.Canceled){t.Fatal("acquisition did not recheck cancellation",e)}
+ if !lock.TryLock(){t.Fatal("post-acquisition cancellation leaked lock")};lock.Unlock()
+ for i:=0;i<50;i++{ctx,cancel:=context.WithCancel(context.Background());lock.Lock();done:=make(chan error,1);go func(){e:=LockContext(ctx,lock.TryLock,lock.Unlock);if e==nil{lock.Unlock()};done<-e}();cancel();lock.Unlock();select{case e:=<-done:if e!=nil&&!errors.Is(e,context.Canceled){t.Fatal(e)};case<-time.After(time.Second):t.Fatal("cancel/unlock race blocked")};if !lock.TryLock(){t.Fatal("late leaked ownership")};lock.Unlock()}
+}

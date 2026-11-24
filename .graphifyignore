@@ -1,0 +1,25 @@
+.git/
+.env*
+data/
+state/
+store/
+sessions/
+auth/
+media/
+exports/
+logs/
+*.db*
+*.sqlite*
+*.key
+*.pem
+bin/
+dist/
+node_modules/
+vendor/
+server/third_party/
+.memsearch/
+work/
+graphify-out/
+
+# Owner-authorized development-only runtime key; never index credentials.
+/.local-credentials/
