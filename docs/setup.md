@@ -1,5 +1,9 @@
 # Set up WhatsApp Connect
 
+WhatsApp Connect runs on your Mac. Codex can help you build it and set up the client connection. You scan the pairing QR code from your own phone.
+
+Choose the [private tunnel](#connect-chatgpt-and-dot-through-a-private-tunnel) for Dot and scheduled digests. Choose the [local desktop plugin](#install-the-local-desktop-plugin) for interactive use in Codex or ChatGPT Work on the Mac that hosts the connector.
+
 ## Build on macOS
 
 Install Go 1.27.0 or a compatible newer version, Xcode command-line tools and Python 3.9 or later. Put the source in a directory whose path has no spaces, then run the following from that directory.
@@ -48,11 +52,11 @@ Use this path for Dot and scheduled cloud digests. It requires a ChatGPT workspa
 3. With the tunnel running, open [ChatGPT Plugins](https://chatgpt.com/plugins), then choose **+ → Add custom MCP server**. Name it **WhatsApp Connect**. Under **Connection**, choose **Tunnel** and select your tunnel or enter its ID. Choose **No authentication** for this stdio server behind your scoped private tunnel. The tunnel client still authenticates to OpenAI with its restricted runtime key. Review the connection, choose **Create as a plugin**, then review the discovered tools and install the plugin in your account. [Register and test a custom MCP server](https://developers.openai.com/plugins/deploy/connect-chatgpt)
 4. In a new Dot chat, ask it to call `whatsapp_status`, then search for a message you know is in the archive. Check that the status reports a connected, logged-in owner and that the result comes from the right chat. Review the available history and dates. If tools are stale, refresh the app's tools in ChatGPT and retry in a new chat.
 
-Keep the Mac awake and online and the tunnel client running. After the search works, [choose groups and schedule the digests](dot-digests.md).
+Keep the Mac awake and online and the tunnel client running. If you started the tunnel in a foreground Terminal session, leave it running there. After restarting the Mac, check the tunnel and `whatsapp_status` before the next digest. You can close Codex after setup because Dot connects through the running tunnel. After the search works, [choose groups and schedule the digests](dot-digests.md).
 
 ## Install the local desktop plugin
 
-Use this path for local ChatGPT Work or Codex on the Mac. Stage just the two manifests and the executable from the built source directory.
+Use this path for local ChatGPT Work or Codex on the Mac. The desktop host launches the connector when you use the plugin, so keep that host open for local use. Stage just the two manifests and the executable from the built source directory.
 
 ```sh
 mkdir -p work/desktop-plugin/bin

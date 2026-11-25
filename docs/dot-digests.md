@@ -1,6 +1,6 @@
 # Schedule WhatsApp digests in Dot
 
-Pair your account and [connect the plugin through a private tunnel](setup.md#connect-chatgpt-and-dot-through-a-private-tunnel) first. Try a real search in Dot. The Mac and tunnel must be available at each scheduled run.
+Pair your account and [connect the plugin through a private tunnel](setup.md#connect-chatgpt-and-dot-through-a-private-tunnel) first. Try a real search in Dot. **At each scheduled run, the Mac must be awake and online, with WhatsApp Connect and its tunnel running.** Dot runs the schedule in the cloud, so Codex can be closed.
 
 ## Choose the groups
 
